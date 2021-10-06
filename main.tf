@@ -4,6 +4,8 @@ locals {
   private_subnet_ids = coalescelist(module.vpc.private_subnets, var.private_subnet_ids, [""])
   public_subnet_ids  = coalescelist(module.vpc.public_subnets, var.public_subnet_ids, [""])
 
+  acm_certificate_name = var.route53_record_name != null ? var.route53_record_name : var.name
+
   # Atlantis
   atlantis_image = var.atlantis_image == "" ? "ghcr.io/runatlantis/atlantis:${var.atlantis_version}" : var.atlantis_image
   atlantis_url = "https://${coalesce(
@@ -351,7 +353,7 @@ module "acm" {
 
   create_certificate = var.certificate_arn == ""
 
-  domain_name = var.acm_certificate_domain_name == "" ? join(".", [var.name, var.route53_zone_name]) : var.acm_certificate_domain_name
+  domain_name = var.acm_certificate_domain_name == "" ? join(".", [local.acm_certificate_name, var.route53_zone_name]) : var.acm_certificate_domain_name
 
   zone_id = var.certificate_arn == "" ? element(concat(data.aws_route53_zone.this.*.id, [""]), 0) : ""
 

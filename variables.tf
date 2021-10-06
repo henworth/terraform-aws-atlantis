@@ -187,6 +187,12 @@ variable "acm_certificate_domain_name" {
   default     = ""
 }
 
+variable "use_record_name_on_certificate" {
+  description = "Whether to use `route53_record_name` in ACM certificate name, otherwise `name` is used"
+  type        = bool
+  default     = false
+}
+
 # Route53
 variable "route53_zone_name" {
   description = "Route53 zone name to create ACM certificate in and main A-record, without trailing dot"
