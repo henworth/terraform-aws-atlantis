@@ -17,14 +17,37 @@ locals {
   atlantis_url_events = "${local.atlantis_url}/events"
 
   # Include only one group of secrets - for github, gitlab or bitbucket
-  has_secrets = var.atlantis_gitlab_user_token != "" || var.atlantis_github_user_token != "" || var.atlantis_bitbucket_user_token != ""
+  has_secrets = !var.manage_secrets || var.atlantis_gitlab_user_token != "" || var.atlantis_github_user_token != "" || var.atlantis_bitbucket_user_token != ""
+
+  atlantis_vcs_provider = var.atlantis_github_app ? "${var.atlantis_vcs_provider}-app" : var.atlantis_vcs_provider
+
+  secret_key_map = {
+    github     = "ATLANTIS_GH_TOKEN"
+    github-app = "ATLANTIS_GH_APP_KEY"
+    gitlab     = "ATLANTIS_GITLAB_TOKEN"
+    bitbucket  = "ATLANTIS_BITBUCKET_TOKEN"
+  }
+
+  secret_value_map = {
+    github     = var.atlantis_github_user_token_ssm_parameter_name
+    github-app = var.atlantis_github_user_token_ssm_parameter_name
+    gitlab     = var.atlantis_gitlab_user_token_ssm_parameter_name
+    bitbucket  = var.atlantis_bitbucket_user_token_ssm_parameter_name
+  }
+
+  webhook_key_map = {
+    github     = "ATLANTIS_GH_WEBHOOK_SECRET"
+    github-app = "ATLANTIS_GH_WEBHOOK_SECRET"
+    gitlab     = "ATLANTIS_GITLAB_WEBHOOK_SECRET"
+    bitbucket  = "ATLANTIS_BITBUCKET_WEBHOOK_SECRET"
+  }
 
   # token
-  secret_name_key        = local.has_secrets ? var.atlantis_gitlab_user_token != "" ? "ATLANTIS_GITLAB_TOKEN" : var.atlantis_github_user_token != "" ? "ATLANTIS_GH_TOKEN" : "ATLANTIS_BITBUCKET_TOKEN" : ""
-  secret_name_value_from = local.has_secrets ? var.atlantis_gitlab_user_token != "" ? var.atlantis_gitlab_user_token_ssm_parameter_name : var.atlantis_github_user_token != "" ? var.atlantis_github_user_token_ssm_parameter_name : var.atlantis_bitbucket_user_token_ssm_parameter_name : ""
+  secret_name_key = local.has_secrets ? lookup(local.secret_key_map, local.atlantis_vcs_provider) : ""
+  secret_name_value_from = local.has_secrets ? lookup(local.secret_value_map, local.atlantis_vcs_provider) : ""
 
   # webhook
-  secret_webhook_key = local.has_secrets || var.atlantis_github_webhook_secret != "" ? var.atlantis_gitlab_user_token != "" ? "ATLANTIS_GITLAB_WEBHOOK_SECRET" : var.atlantis_github_user_token != "" || var.atlantis_github_webhook_secret != "" ? "ATLANTIS_GH_WEBHOOK_SECRET" : "ATLANTIS_BITBUCKET_WEBHOOK_SECRET" : ""
+  secret_webhook_key = local.has_secrets ? lookup(local.webhook_key_map, local.atlantis_vcs_provider) : ""
 
   # determine if the alb has authentication enabled, otherwise forward the traffic unauthenticated
   alb_authenication_method = length(keys(var.alb_authenticate_oidc)) > 0 ? "authenticate-oidc" : length(keys(var.alb_authenticate_cognito)) > 0 ? "authenticate-cognito" : "forward"
@@ -36,14 +59,39 @@ locals {
   # Container definitions
   container_definitions = var.custom_container_definitions == "" ? var.atlantis_bitbucket_user_token != "" ? jsonencode(concat([module.container_definition_bitbucket.json_map_object], var.extra_container_definitions)) : jsonencode(concat([module.container_definition_github_gitlab.json_map_object], var.extra_container_definitions)) : var.custom_container_definitions
 
-  container_definition_environment = [
+  container_definition_environment_github = [
     {
-      name  = "ATLANTIS_ALLOW_REPO_CONFIG"
-      value = var.allow_repo_config
-    },
+      name  = "ATLANTIS_GH_USER"
+      value = var.atlantis_github_user
+    }
+  ]
+
+  container_definition_environment_gitlab = [
     {
       name  = "ATLANTIS_GITLAB_HOSTNAME"
       value = var.atlantis_gitlab_hostname
+    },
+    {
+      name  = "ATLANTIS_GITLAB_USER"
+      value = var.atlantis_gitlab_user
+    },
+  ]
+
+  container_definition_environment_bitbucket = [
+    {
+      name  = "ATLANTIS_BITBUCKET_USER"
+      value = var.atlantis_bitbucket_user
+    },
+    {
+      name  = "ATLANTIS_BITBUCKET_BASE_URL"
+      value = var.atlantis_bitbucket_base_url
+    },
+  ]
+
+  container_definition_environment_base = [
+    {
+      name  = "ATLANTIS_ALLOW_REPO_CONFIG"
+      value = var.allow_repo_config
     },
     {
       name  = "ATLANTIS_LOG_LEVEL"
@@ -58,22 +106,6 @@ locals {
       value = local.atlantis_url
     },
     {
-      name  = "ATLANTIS_GH_USER"
-      value = var.atlantis_github_user
-    },
-    {
-      name  = "ATLANTIS_GITLAB_USER"
-      value = var.atlantis_gitlab_user
-    },
-    {
-      name  = "ATLANTIS_BITBUCKET_USER"
-      value = var.atlantis_bitbucket_user
-    },
-    {
-      name  = "ATLANTIS_BITBUCKET_BASE_URL"
-      value = var.atlantis_bitbucket_base_url
-    },
-    {
       name  = "ATLANTIS_REPO_ALLOWLIST"
       value = join(",", var.atlantis_repo_allowlist)
     },
@@ -82,6 +114,15 @@ locals {
       value = var.atlantis_hide_prev_plan_comments
     },
   ]
+
+  container_definition_environment_vcs_provider = {
+    github     = local.container_definition_environment_github
+    github-app = local.container_definition_environment_github
+    gitlab     = local.container_definition_environment_gitlab
+    bitbucket  = local.container_definition_environment_bitbucket
+  }
+
+  container_definition_environment = concat(local.container_definition_environment_base, local.container_definition_environment_vcs_provider[local.atlantis_vcs_provider])
 
   # ECS task definition
   latest_task_definition_rev = var.external_task_definition_updates ? max(aws_ecs_task_definition.atlantis.revision, data.aws_ecs_task_definition.atlantis[0].revision) : aws_ecs_task_definition.atlantis.revision
@@ -127,13 +168,19 @@ data "aws_route53_zone" "this" {
 # Secret for webhook
 ################################################################################
 resource "random_id" "webhook" {
-  count = var.atlantis_github_webhook_secret != "" ? 0 : 1
+  count = var.manage_secrets && var.atlantis_github_webhook_secret != "" ? 1 : 0
 
   byte_length = "64"
 }
 
+data "aws_ssm_parameter" "webhook" {
+  count = var.manage_secrets ? 0 : 1
+
+  name = var.webhook_ssm_parameter_name
+}
+
 resource "aws_ssm_parameter" "webhook" {
-  count = var.atlantis_bitbucket_user_token != "" ? 0 : 1
+  count = var.manage_secrets ? 1 : 0
 
   name  = var.webhook_ssm_parameter_name
   type  = "SecureString"
@@ -142,8 +189,14 @@ resource "aws_ssm_parameter" "webhook" {
   tags = local.tags
 }
 
+data "aws_ssm_parameter" "atlantis_github_user_token" {
+  count = (var.atlantis_vcs_provider == "github" || var.atlantis_vcs_provider == "github-app") ? var.manage_secrets ? 0 : 1 : 0
+
+  name = var.atlantis_github_user_token_ssm_parameter_name
+}
+
 resource "aws_ssm_parameter" "atlantis_github_user_token" {
-  count = var.atlantis_github_user_token != "" ? 1 : 0
+  count = (var.atlantis_vcs_provider == "github" || var.atlantis_vcs_provider == "github-app") ? var.manage_secrets ? 1 : 0 : 0
 
   name  = var.atlantis_github_user_token_ssm_parameter_name
   type  = "SecureString"
@@ -152,8 +205,14 @@ resource "aws_ssm_parameter" "atlantis_github_user_token" {
   tags = local.tags
 }
 
+data "aws_ssm_parameter" "atlantis_gitlab_user_token" {
+  count = var.atlantis_vcs_provider == "gitlab" ? var.manage_secrets ? 0 : 1 : 0
+
+  name = var.atlantis_gitlab_user_token_ssm_parameter_name
+}
+
 resource "aws_ssm_parameter" "atlantis_gitlab_user_token" {
-  count = var.atlantis_gitlab_user_token != "" ? 1 : 0
+  count = var.atlantis_vcs_provider == "gitlab" ? var.manage_secrets ? 1 : 0 : 0
 
   name  = var.atlantis_gitlab_user_token_ssm_parameter_name
   type  = "SecureString"
@@ -162,8 +221,14 @@ resource "aws_ssm_parameter" "atlantis_gitlab_user_token" {
   tags = local.tags
 }
 
+data "aws_ssm_parameter" "atlantis_bitbucket_user_token" {
+  count = var.atlantis_vcs_provider == "bitbucket" ? var.manage_secrets ? 0 : 1 : 0
+
+  name = var.atlantis_bitbucket_user_token_ssm_parameter_name
+}
+
 resource "aws_ssm_parameter" "atlantis_bitbucket_user_token" {
-  count = var.atlantis_bitbucket_user_token != "" ? 1 : 0
+  count = var.atlantis_vcs_provider == "bitbucket" ? var.manage_secrets ? 1 : 0 : 0
 
   name  = var.atlantis_bitbucket_user_token_ssm_parameter_name
   type  = "SecureString"
@@ -450,12 +515,14 @@ data "aws_iam_policy_document" "ecs_task_access_secrets" {
   statement {
     effect = "Allow"
 
-    resources = flatten([
-      aws_ssm_parameter.webhook.*.arn,
-      aws_ssm_parameter.atlantis_github_user_token.*.arn,
-      aws_ssm_parameter.atlantis_gitlab_user_token.*.arn,
-      aws_ssm_parameter.atlantis_bitbucket_user_token.*.arn
-    ])
+    resources = compact(
+      flatten([
+        coalescelist(aws_ssm_parameter.webhook.*.arn, data.aws_ssm_parameter.webhook.*.arn, [""]),
+        coalescelist(aws_ssm_parameter.atlantis_github_user_token.*.arn, data.aws_ssm_parameter.atlantis_github_user_token.*.arn, [""]),
+        coalescelist(aws_ssm_parameter.atlantis_gitlab_user_token.*.arn, data.aws_ssm_parameter.atlantis_gitlab_user_token.*.arn, [""]),
+        coalescelist(aws_ssm_parameter.atlantis_bitbucket_user_token.*.arn, data.aws_ssm_parameter.atlantis_bitbucket_user_token.*.arn, [""])
+      ])
+    )
 
     actions = [
       "ssm:GetParameters",
@@ -478,7 +545,7 @@ data "aws_iam_policy_document" "ecs_task_access_secrets_with_kms" {
 }
 
 resource "aws_iam_role_policy" "ecs_task_access_secrets" {
-  count = var.atlantis_github_user_token != "" || var.atlantis_gitlab_user_token != "" || var.atlantis_bitbucket_user_token != "" ? 1 : 0
+  count = var.manage_secrets ? var.atlantis_github_user_token != "" || var.atlantis_gitlab_user_token != "" || var.atlantis_bitbucket_user_token != "" ? 1 : 0 : 1
 
   name = "ECSTaskAccessSecretsPolicy"
 
