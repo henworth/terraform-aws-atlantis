@@ -150,6 +150,18 @@ variable "allow_unauthenticated_webhook_access_priority" {
   default     = 15
 }
 
+variable "manage_secrets" {
+  description = "Whether to manage the secret values or not"
+  type        = bool
+  default     = false
+}
+
+variable "atlantis_github_app" {
+  description = "Whether to setup as a GitHub app or not"
+  type        = bool
+  default     = false
+}
+
 variable "allow_github_webhooks" {
   description = "Whether to allow access for GitHub webhooks"
   type        = bool
