@@ -150,6 +150,8 @@ locals {
     var.tags,
   )
 
+  ecs_task_role_arn = var.ecs_task_role_arn != "" ? var.ecs_task_role_arn : aws_iam_role.ecs_task_execution.arn
+
   policies_arn = var.policies_arn != null ? var.policies_arn : ["arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"]
 }
 
@@ -678,7 +680,7 @@ module "container_definition_bitbucket" {
 resource "aws_ecs_task_definition" "atlantis" {
   family                   = var.name
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = local.ecs_task_role_arn
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = var.ecs_task_cpu
