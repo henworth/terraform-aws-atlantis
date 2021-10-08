@@ -156,6 +156,12 @@ variable "manage_secrets" {
   default     = false
 }
 
+variable "atlantis_vcs_provider" {
+  description = "Whether to allow access for GitHub webhooks"
+  type        = string
+  default     = ""
+}
+
 variable "atlantis_github_app" {
   description = "Whether to setup as a GitHub app or not"
   type        = bool
