@@ -353,6 +353,12 @@ variable "ecs_task_memory" {
   default     = 512
 }
 
+variable "ecs_task_role_arn" {
+  description = "ARN of IAM role that allows the task to make calls to other AWS services"
+  type        = string
+  default     = ""
+}
+
 variable "container_cpu" {
   description = "The number of cpu units used by the atlantis container. If not specified ecs_task_cpu will be used"
   type        = number
