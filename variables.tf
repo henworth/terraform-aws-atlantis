@@ -473,6 +473,41 @@ variable "volumes_from" {
   default = []
 }
 
+variable "efs_volume" {
+  description = "Configuration for an EFS volume to attach to the container"
+  type = object({
+    name           = string
+    file_system_id = string
+  })
+  default = null
+}
+
+variable "efs_security_group_id" {
+  description = "ID of an existing EFS security group that controls network access to EFS"
+  type        = string
+  default     = null
+}
+
+variable "efs_access_point" {
+  description = "Configuration for an EFS access point containing the \"file_system_id\", \"posix_user\", and \"root_directory\" options"
+  type = object({
+    file_system_id = string
+    posix_user = object({
+      gid = number
+      uid = number
+    })
+    root_directory = object({
+      path = string
+      creation_info = object({
+        owner_gid   = string
+        owner_uid   = string
+        permissions = string
+      })
+    })
+  })
+  default = null
+}
+
 variable "user" {
   description = "The user to run as inside the container. Can be any of these formats: user, user:group, uid, uid:gid, user:gid, uid:group. The default (null) will use the container's configured `USER` directive or root if not set."
   type        = string

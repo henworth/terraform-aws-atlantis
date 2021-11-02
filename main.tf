@@ -43,7 +43,7 @@ locals {
   }
 
   # token
-  secret_name_key = local.has_secrets ? lookup(local.secret_key_map, local.atlantis_vcs_provider) : ""
+  secret_name_key        = local.has_secrets ? lookup(local.secret_key_map, local.atlantis_vcs_provider) : ""
   secret_name_value_from = local.has_secrets ? lookup(local.secret_value_map, local.atlantis_vcs_provider) : ""
 
   # webhook
@@ -55,6 +55,15 @@ locals {
   # ECS - existing or new?
   ecs_cluster_id  = var.ecs_cluster_id == "" ? module.ecs.ecs_cluster_id : var.ecs_cluster_id
   ecs_cluster_arn = var.ecs_cluster_arn == "" ? module.ecs.ecs_cluster_arn : var.ecs_cluster_arn
+
+  # EFS
+  efs_volume_mount_point = {
+    "containerPath" = "/atlantis",
+    "sourceVolume"  = var.efs_volume.name,
+    "readOnly"      = false
+  }
+
+  mount_points = var.efs_volume != null ? concat([local.efs_volume_mount_point], var.mount_points) : var.mount_points
 
   # Container definitions
   container_definitions = var.custom_container_definitions == "" ? var.atlantis_bitbucket_user_token != "" ? jsonencode(concat([module.container_definition_bitbucket.json_map_object], var.extra_container_definitions)) : jsonencode(concat([module.container_definition_github_gitlab.json_map_object], var.extra_container_definitions)) : var.custom_container_definitions
@@ -115,6 +124,13 @@ locals {
     },
   ]
 
+  container_definition_environment_efs = [
+    {
+      "name" : "ATLANTIS_DATA_DIR",
+      "value" : "/atlantis",
+    }
+  ]
+
   container_definition_environment_vcs_provider = {
     github     = local.container_definition_environment_github
     github-app = local.container_definition_environment_github
@@ -122,7 +138,11 @@ locals {
     bitbucket  = local.container_definition_environment_bitbucket
   }
 
-  container_definition_environment = concat(local.container_definition_environment_base, local.container_definition_environment_vcs_provider[local.atlantis_vcs_provider])
+  container_definition_environment = concat(
+    local.container_definition_environment_base,
+    local.container_definition_environment_vcs_provider[local.atlantis_vcs_provider],
+    var.efs_volume != null ? local.container_definition_environment_efs : []
+  )
 
   # ECS task definition
   latest_task_definition_rev = var.external_task_definition_updates ? max(aws_ecs_task_definition.atlantis.revision, data.aws_ecs_task_definition.atlantis[0].revision) : aws_ecs_task_definition.atlantis.revision
@@ -584,7 +604,7 @@ module "container_definition_github_gitlab" {
   container_depends_on     = var.container_depends_on
   essential                = var.essential
   readonly_root_filesystem = var.readonly_root_filesystem
-  mount_points             = var.mount_points
+  mount_points             = local.mount_points
   volumes_from             = var.volumes_from
 
   port_mappings = [
@@ -641,7 +661,7 @@ module "container_definition_bitbucket" {
   container_depends_on     = var.container_depends_on
   essential                = var.essential
   readonly_root_filesystem = var.readonly_root_filesystem
-  mount_points             = var.mount_points
+  mount_points             = local.mount_points
   volumes_from             = var.volumes_from
 
   port_mappings = [
@@ -674,6 +694,45 @@ module "container_definition_bitbucket" {
   )
 }
 
+resource "aws_efs_access_point" "atlantis" {
+  count = var.efs_volume != null ? 1 : 0
+
+  file_system_id = var.efs_access_point.file_system_id
+
+  posix_user {
+    gid = var.efs_access_point.posix_user.gid
+    uid = var.efs_access_point.posix_user.uid
+
+    secondary_gids = []
+  }
+
+  root_directory {
+    path = var.efs_access_point.root_directory.path
+
+    creation_info {
+      owner_gid   = var.efs_access_point.root_directory.creation_info.owner_gid
+      owner_uid   = var.efs_access_point.root_directory.creation_info.owner_uid
+      permissions = var.efs_access_point.root_directory.creation_info.permissions
+    }
+  }
+
+  tags = local.tags
+}
+
+resource "aws_security_group_rule" "atlantis" {
+  count = var.efs_volume != null ? 1 : 0
+
+  security_group_id = var.efs_security_group_id
+  type              = "ingress"
+  from_port         = 2049
+  to_port           = 2049
+  protocol          = "tcp"
+
+  source_security_group_id = module.atlantis_sg.security_group_id
+
+  description = "Allow ingress traffic to EFS from Atlantis instance ${var.name}"
+}
+
 resource "aws_ecs_task_definition" "atlantis" {
   family                   = var.name
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
@@ -684,6 +743,31 @@ resource "aws_ecs_task_definition" "atlantis" {
   memory                   = var.ecs_task_memory
 
   container_definitions = local.container_definitions
+
+  dynamic "volume" {
+    for_each = var.efs_volume != null ? [true] : []
+
+    content {
+      name = var.efs_volume.name
+
+      dynamic "efs_volume_configuration" {
+        for_each = var.efs_volume != null ? [true] : []
+
+        content {
+          file_system_id     = var.efs_volume.file_system_id
+          transit_encryption = "ENABLED"
+
+          dynamic "authorization_config" {
+            for_each = var.efs_volume != null ? [true] : []
+
+            content {
+              access_point_id = resource.aws_efs_access_point.atlantis[0].id
+            }
+          }
+        }
+      }
+    }
+  }
 
   tags = local.tags
 }

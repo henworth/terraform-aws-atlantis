@@ -61,6 +61,17 @@ output "ecs_cluster_arn" {
   value       = local.ecs_cluster_arn
 }
 
+# EFS
+output "efs_security_group_id" {
+  description = "Security group for EFS access"
+  value       = element(concat(aws_security_group_rule.atlantis[*].id, [""]), 0)
+}
+
+output "efs_access_point_id" {
+  description = "ID of the EFS access point"
+  value       = element(concat(aws_efs_access_point.atlantis[*].id, [""]), 0)
+}
+
 # VPC
 output "vpc_id" {
   description = "ID of the VPC that was created or passed in"
