@@ -339,6 +339,9 @@ module "alb" {
       backend_port         = var.atlantis_port
       target_type          = "ip"
       deregistration_delay = 10
+      health_check = {
+        path = "/healthz"
+      }
     },
   ]
 
@@ -766,6 +769,13 @@ resource "aws_ecs_task_definition" "atlantis" {
           }
         }
       }
+    }
+  }
+
+  dynamic "ephemeral_storage" {
+    for_each = var.enable_ephemeral_storage ? [1] : []
+    content {
+      size_in_gib = var.ephemeral_storage_size
     }
   }
 
